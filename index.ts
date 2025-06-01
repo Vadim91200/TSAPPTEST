@@ -15,7 +15,7 @@ import {
   
   async function initializeClient(): Promise<{ connection: Connection; dlmm: DLMM }> {
     const RPC = "https://neat-magical-market.solana-mainnet.quiknode.pro/22f4786138ebd920140d051f0ebdc6da71f058db/";
-    const poolAddress = new PublicKey("5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6");
+    const poolAddress = new PublicKey(process.env.POOL_ADDRESS as string);
     const connection = new Connection(RPC, "finalized");
     const dlmm = await DLMM.create(connection, poolAddress, {
       cluster: "mainnet-beta",
@@ -28,7 +28,8 @@ import {
     if (!PRIVATE_KEY) {
         throw new Error("PRIVATE_KEY not found in environment variables");
     }
-    const privateKeyBytes = bs58.decode(PRIVATE_KEY);
+    const privateKeyArray = JSON.parse(PRIVATE_KEY);
+    const privateKeyBytes = new Uint8Array(privateKeyArray);
     return Keypair.fromSecretKey(privateKeyBytes);
   }
   
@@ -230,6 +231,76 @@ import {
     }
   }
   
+  async function getTokenBalances(connection: Connection, user: Keypair, dlmm: DLMM): Promise<{ xBalance: BN, yBalance: BN }> {
+    const xAccount = await connection.getTokenAccountsByOwner(user.publicKey, { mint: dlmm.tokenX.publicKey });
+    const yAccount = await connection.getTokenAccountsByOwner(user.publicKey, { mint: dlmm.tokenY.publicKey });
+    
+    const xBalance = xAccount.value[0] ? 
+      new BN(JSON.parse(Buffer.from(xAccount.value[0].account.data).toString()).amount) : 
+      new BN(0);
+    const yBalance = yAccount.value[0] ? 
+      new BN(JSON.parse(Buffer.from(yAccount.value[0].account.data).toString()).amount) : 
+      new BN(0);
+    
+    return { xBalance, yBalance };
+  }
+  
+  async function rebalanceAndCreateNewPosition(
+    dlmm: DLMM,
+    user: Keypair,
+    positions: Positions,
+    connection: Connection
+  ): Promise<void> {
+    // First remove liquidity
+    await removeLiquidity(dlmm, user, positions, connection);
+    
+    // Get current balances
+    const { xBalance, yBalance } = await getTokenBalances(connection, user, dlmm);
+    const totalValue = xBalance.add(yBalance);
+    const targetBalance = totalValue.div(new BN(2));
+    
+    // Determine which token to swap and how much
+    let swapAmount: BN;
+    let swapYToX: boolean;
+    
+    if (xBalance.gt(yBalance)) {
+      swapAmount = xBalance.sub(targetBalance);
+      swapYToX = false;
+    } else {
+      swapAmount = yBalance.sub(targetBalance);
+      swapYToX = true;
+    }
+    
+    // Perform swap if needed
+    if (swapAmount.gt(new BN(0))) {
+      const binArrays = await dlmm.getBinArrayForSwap(swapYToX);
+      const swapQuote = await dlmm.swapQuote(swapAmount, swapYToX, new BN(1), binArrays);
+      
+      const swapTx = await dlmm.swap({
+        inToken: swapYToX ? dlmm.tokenY.publicKey : dlmm.tokenX.publicKey,
+        binArraysPubkey: swapQuote.binArraysPubkey,
+        inAmount: swapAmount,
+        lbPair: dlmm.pubkey,
+        user: user.publicKey,
+        minOutAmount: swapQuote.minOutAmount,
+        outToken: swapYToX ? dlmm.tokenX.publicKey : dlmm.tokenY.publicKey,
+      });
+      
+      await sendAndConfirmTransaction(connection, swapTx, [user]);
+    }
+    
+    // Create new position with balanced liquidity
+    const newPosition = Keypair.generate();
+    const { xBalance: finalXBalance, yBalance: finalYBalance } = await getTokenBalances(connection, user, dlmm);
+    
+    await initializePosition(dlmm, user, newPosition, connection);
+    
+    // Add remaining liquidity
+    if (finalXBalance.gt(new BN(0)) || finalYBalance.gt(new BN(0))) {
+      await addLiquidity(dlmm, user, newPosition, connection);
+    }
+  }
+  
   async function main(): Promise<void> {
     const { connection, dlmm } = await initializeClient();
     const user = getUserKeypair();
@@ -242,7 +313,8 @@ import {
         console.log("3. Remove Liquidity");
         console.log("4. Swap");
         console.log("5. Display Active Positions");
-        console.log("6. Exit");
+        console.log("6. Rebalance and Create New Position");
+        console.log("7. Exit");
   
         const choice = await new Promise<string>((resolve) => {
             process.stdin.once('data', (data) => {
@@ -269,6 +341,10 @@ import {
                 await displayPositions(dlmm, user);
                 break;
             case '6':
+                const positions6 = await dlmm.getPositionsByUserAndLbPair(user.publicKey);
+                await rebalanceAndCreateNewPosition(dlmm, user, positions6, connection);
+                break;
+            case '7':
                 process.exit(0);
             default:
                 console.log("Invalid choice. Please try again.");
