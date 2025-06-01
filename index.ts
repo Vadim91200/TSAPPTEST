@@ -7,7 +7,7 @@ import {
   import { bs58 } from "@coral-xyz/anchor/dist/cjs/utils/bytes";
   import DLMM, {LbPosition } from '@meteora-ag/dlmm'
   import { BN } from "@coral-xyz/anchor";
-  import { getMint, Mint } from "@solana/spl-token";
+  import { getMint, Mint, AccountLayout } from "@solana/spl-token";
   import * as readline from 'readline';
   
   require('dotenv').config();
@@ -234,12 +234,13 @@ import {
   async function getTokenBalances(connection: Connection, user: Keypair, dlmm: DLMM): Promise<{ xBalance: BN, yBalance: BN }> {
     const xAccount = await connection.getTokenAccountsByOwner(user.publicKey, { mint: dlmm.tokenX.publicKey });
     const yAccount = await connection.getTokenAccountsByOwner(user.publicKey, { mint: dlmm.tokenY.publicKey });
-    
+    console.log("🚀 ~ xAccount:", xAccount);
+    console.log("🚀 ~ yAccount:", yAccount);
     const xBalance = xAccount.value[0] ? 
-      new BN(JSON.parse(Buffer.from(xAccount.value[0].account.data).toString()).amount) : 
+      new BN(AccountLayout.decode(xAccount.value[0].account.data).amount) : 
       new BN(0);
     const yBalance = yAccount.value[0] ? 
-      new BN(JSON.parse(Buffer.from(yAccount.value[0].account.data).toString()).amount) : 
+      new BN(AccountLayout.decode(yAccount.value[0].account.data).amount) : 
       new BN(0);
     
     return { xBalance, yBalance };
