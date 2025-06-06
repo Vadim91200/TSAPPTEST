@@ -3,7 +3,6 @@ import {
   Keypair,
   PublicKey,
   sendAndConfirmTransaction,
-  ComputeBudgetProgram,
 } from "@solana/web3.js";
 import { bs58 } from "@coral-xyz/anchor/dist/cjs/utils/bytes";
 import DLMM, { LbPosition } from '@meteora-ag/dlmm'
@@ -68,7 +67,10 @@ async function initializePosition(
   const totalXAmount = xAmount || new BN(0);
   const totalYAmount = yAmount || new BN(100 * 10 ** 6);
 
-  // Create Position
+  // Add slippage tolerance (0.5%)
+  const slippage = 50; // 0.5% in basis points
+
+  // Create Position with slippage tolerance
   const createPositionTx =
     await dlmm.initializePositionAndAddLiquidityByStrategy({
       positionPubKey: newOneSidePosition.publicKey,
@@ -80,6 +82,7 @@ async function initializePosition(
         minBinId,
         strategyType: 0,
       },
+      slippage, // Add slippage tolerance
     });
 
   try {
@@ -411,7 +414,7 @@ async function rebalanceAndCreateNewPosition(
 
     // Wait for a few seconds to let the blockchain update
     console.log("Waiting for balances to update...");
-    await new Promise(resolve => setTimeout(resolve, 50000));
+    await new Promise(resolve => setTimeout(resolve, 15000));
 
     // Recheck balances after swap
     const { xBalance: updatedXBalance, yBalance: updatedYBalance } = await getTokenBalances(connection, user, dlmm);
